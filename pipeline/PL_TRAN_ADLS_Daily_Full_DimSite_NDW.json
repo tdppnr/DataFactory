@@ -1,0 +1,260 @@
+{
+    "$schema": "http://datafactories.schema.management.azure.com/schemas/2015-09-01/Microsoft.DataFactory.Pipeline.json",
+    "name": "PL_TRAN_ADLS_Daily_Full_DimSite_NDW",
+    "properties":  {
+	"description": "Daily Full copies of data from Source db to the data lake.",
+        "activities": [
+            {
+                "name": "LKP_Watermark_DimSite",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "7.00:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SqlServerSource",
+                        "sqlReaderStoredProcedureName": "[dbo].[usp_get_current_watermark]",
+                        "storedProcedureParameters": {
+                            "tablename": {
+                                "type": "String",
+                                "value": "DimSite"
+                            }
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "DS_SQL_MI_Watermark",
+                        "type": "DatasetReference"
+                    }
+                }
+            },
+            {
+                "name": "LKP_DimSite",
+                "type": "Lookup",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_Watermark_DimSite",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "7.00:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SqlServerSource",
+                        "sqlReaderQuery": {
+                            "value": "select ISNULL(max(COALESCE(modified_date,created_date)),'@{activity('LKP_Watermark_DimSite').output.firstRow.LastModifiedDate}') as NewWatermarkvalue \n, count(1) as newwatermarkcount \nfrom [dbo].DimSite with (nolock)\nwhere COALESCE(modified_date,created_date) > '@{activity('LKP_Watermark_DimSite').output.firstRow.LastModifiedDate}'",
+                            "type": "Expression"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "DS_SQL_INISTE",
+                        "type": "DatasetReference"
+                    }
+                }
+            },
+            {
+                "name": "AC_DATA_DS_SQL_DimSite_TO_DS_ADLS_DimSite",
+                "type": "Copy",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_DimSite",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "7.00:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SqlServerSource",
+                        "sqlReaderQuery": {
+                            "value": "select *, getdate() as extractdatetime from dbo.DimSite  with (nolock)\nwhere Coalesce(modified_date,created_date) > '@{activity('LKP_Watermark_DimSite').output.firstRow.LastModifiedDate}'",
+                            "type": "Expression"
+                        }
+                    },
+                    "sink": {
+                        "type": "ParquetSink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        }
+                    },
+                    "enableStaging": false
+                },
+                "inputs": [
+                    {
+                        "referenceName": "DS_SQL_INISTE",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "DS_ADLS_ELEMENT",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "Sinktablename": {
+                                "value": "DimSite",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "AC_DS_SQL_DimSite_Holding_Obj_Keys_Values_To_DS_ADLS",
+                "type": "Copy",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "7.00:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SqlServerSource",
+                        "sqlReaderQuery": {
+                            "value": "select * from dbo.DimSite_holding_object_keys_values  with (nolock)",
+                            "type": "Expression"
+                        }
+                    },
+                    "sink": {
+                        "type": "ParquetSink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        }
+                    },
+                    "enableStaging": false
+                },
+                "inputs": [
+                    {
+                        "referenceName": "DS_SQL_INISTE",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "DS_ADLS_DimSite_Holding_Object_Keys_Values",
+                        "type": "DatasetReference"
+                    }
+                ]
+            },
+            {
+                "name": "IfCondition1",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "AC_DATA_DS_SQL_DimSite_To_DS_ADLS_DimSite",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    },
+                    {
+                        "activity": "AC_DS_SQL_DimSite_Holding_Obj_Keys_Values_To_DS_ADLS",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@greater(activity('LKP_DimSite').output.firstRow.newwatermarkcount ,0)",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "ADBR_Process_Fact_DimSite",
+                            "type": "DatabricksDimSitebook",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "7.00:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "DimSitebookPath": "/Shared/NationalDW/Facts/ADBR_Process_Fact_DimSite"
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "LS_ADBR",
+                                "type": "LinkedServiceReference"
+                            }
+                        },
+                        {
+                            "name": "Update_Watermark_DimSite",
+                            "type": "SqlServerStoredProcedure",
+                            "dependsOn": [
+                                {
+                                    "activity": "ADBR_Process_Fact_DimSite",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "7.00:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "storedProcedureName": "[dbo].[usp_write_watermark]",
+                                "storedProcedureParameters": {
+                                    "LastModifiedDateTime": {
+                                        "value": {
+                                            "value": "@{activity('LKP_DimSite').output.firstRow.NewWatermarkvalue}",
+                                            "type": "Expression"
+                                        },
+                                        "type": "DateTime"
+                                    },
+                                    "tablename": {
+                                        "value": {
+                                            "value": "@{activity('LKP_DimSite').output.firstRow.tablename}",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    }
+                                }
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "LS_SQL_MI",
+                                "type": "LinkedServiceReference"
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "folder": {
+            "name": "NationalDW/Facts"
+        },
+        "annotations": []
+    }
+}
